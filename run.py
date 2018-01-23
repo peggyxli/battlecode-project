@@ -13,13 +13,6 @@ new_d = []
 rotate_mods = [0, -1, 1, -2, 2, -3, 3, -4]
 
 
-def move_towards(unit_id, d):
-    for mod in rotate_mods:
-        if gc.can_move(unit_id, directions[(d+mod)%8]):
-            gc.move_robot(unit_id, directions[(d+mod)%8])
-            travel_directions[unit_id] = directions[(d+mod)%8]
-            break
-
 def move_fowards(unit_id):
     if unit_id not in travel_directions:
         travel_directions[unit_id] = random.choice(directions)
@@ -29,39 +22,21 @@ def move_fowards(unit_id):
             gc.move_robot(unit_id, directions[(d+mod)%8])
             travel_directions[unit_id] = directions[(d+mod)%8]
             break
-            
-def move_to_bp(unit):
-    if len(my_blueprints) > 0:
-        loc = unit.location.map_location()
-        closest_bp = my_blueprints[0]
-        closest_dist = 100
-        for bp in my_blueprints:
-            test_dist = loc.distance_squared_to(bp.location.map_location()) 
-            if test_dist < closest_dist:
-                closest_bp = bp
-                closest_dist = test_dist
-        if gc.can_build(unit.id, closest_bp.id):
-            gc.build(unit.id, closest_bp.id)
-            return False
-        elif closest_dist <= 50:
-            travel_directions[unit.id] = loc.direction_to(closest_bp.location.map_location())
-            return True
-    return False
-    
-def closest_blueprint(unit):
-    if len(my_blueprints) > 0:
-        loc = unit.location.map_location()
-        closest_bp = my_blueprints[0]
-        closest_dist = 100
-        for bp in my_blueprints:
-            test_dist = loc.distance_squared_to(bp.location.map_location()) 
-            if test_dist < closest_dist:
-                closest_bp = bp
-                closest_dist = test_dist
-        if closest_dist <= 50:
-            return closest_bp
-    return unit
 
+def find_closest(unit, myarr, threshold = 200):
+    if len(myarr) > 0:
+        loc = unit.location.map_location()
+        closest_unit = myarr[0]
+        closest_dist = 250
+        for other in myarr:
+            test_dist = loc.distance_squared_to(other.location.map_location()) 
+            if test_dist < closest_dist:
+                closest_unit = other
+                closest_dist = test_dist
+        if closest_dist <= threshold:   #for worker search
+            return closest_unit
+    return unit
+            
 def good_bp_loc(location):
     if not gc.starting_map(bc.Planet.Earth).is_passable_terrain_at(location):
         return False
@@ -92,6 +67,17 @@ def harvest_nearby(unit):
             travel_directions[unit.id] = dir
             return True
     return False
+
+def find_lowest(myarr):
+    lowest_unit = myarr[0]
+    most_missing = 0
+    for other in myarr:
+        missing_health = other.max_health - other.health
+        if missing_health > most_missing:
+            most_missing = missing_health
+            lowest_unit = other
+    return lowest_unit
+
     
 random.seed(6137)
 
@@ -100,6 +86,8 @@ random.seed(6137)
 gc.queue_research(bc.UnitType.Rocket)
 gc.queue_research(bc.UnitType.Ranger)
 gc.queue_research(bc.UnitType.Ranger)
+gc.queue_research(bc.UnitType.Healer)
+gc.queue_research(bc.UnitType.Healer)
 
 my_team = gc.team()
 if my_team == bc.Team.Blue:
@@ -126,6 +114,7 @@ while True:
     my_knights = []
     my_rangers = []
     my_mages = []
+    my_healers = []
     enemy_locations = []
     
     for unit in gc.my_units():
@@ -145,15 +134,16 @@ while True:
             my_knights.append(unit)
         elif unit.unit_type == bc.UnitType.Ranger:
             my_rangers.append(unit)
+        elif unit.unit_type == bc.UnitType.Healer:
+            my_healers.append(unit)
+        elif unit.unit_type == bc.UnitType.Mage:
+            my_mages.append(unit)
     
-    try:
+    try:    #factory code
         for unit in my_factories:
             unit_location = unit.location.map_location()
             garrison = unit.structure_garrison()
             if len(garrison) > 0:
-                print('pyround:', gc.round())
-                print (unit_location)
-                print (len(garrison))
                 for d in directions:
                     if gc.can_unload(unit.id, d):
                         gc.unload(unit.id, d)
@@ -162,20 +152,22 @@ while True:
                         break
             elif len(my_factories)*2 > len(my_knights) and gc.can_produce_robot(unit.id, bc.UnitType.Knight):
                 gc.produce_robot(unit.id, bc.UnitType.Knight)
-            elif len(my_rangers)/4 > len(my_healers) and gc.can_produce_robot(unit.id, bc.UnitType.Ranger):
+            elif len(my_rangers)/4 < len(my_healers) and gc.can_produce_robot(unit.id, bc.UnitType.Ranger):
                 gc.produce_robot(unit.id, bc.UnitType.Ranger)
-            elif gc.can_produce_robot(unit.id, bc.UnitType.Healer):
+            elif len(my_healers) <= len(my_mages) and gc.can_produce_robot(unit.id, bc.UnitType.Healer):
                 gc.produce_robot(unit.id, bc.UnitType.Healer)
+            elif gc.can_produce_robot(unit.id, bc.UnitType.Mage):
+                gc.produce_robot(unit.id, bc.UnitType.Mage)            
     except Exception as e:
         print('Factory Error:', e)				
         traceback.print_exc()            
                 
-    try:
+    try:    #worker code
         for unit in my_workers:
             unit_location = unit.location.map_location()
             doing_action = False
             
-            test_bp = closest_blueprint(unit)
+            test_bp = find_closest(unit, my_blueprints, 50)
             if test_bp != unit: #if there's a blueprint nearby
                 if gc.can_build(unit.id, test_bp.id):
                     gc.build(unit.id, test_bp.id)
@@ -193,9 +185,9 @@ while True:
             #        if gc.can_blueprint(unit.id, bc.UnitType.Rocket, unit_location.direction_to(bp_space)):
             #            gc.blueprint(unit.id, bc.UnitType.Rocket, unit_location.direction_to(bp_space))
             #    elif gc.is_move_ready(unit.id): #move to a better spot
-            #        move_towards(unit.id, random.choice(directions))
+            #        move_fowards(unit.id)
             
-            elif (gc.karbonite()/2 > bc.UnitType.Factory.blueprint_cost()) or (len(my_factories) < 4):
+            elif (gc.karbonite()/2 > bc.UnitType.Factory.blueprint_cost()*len(my_factories)) or (len(my_factories) < 4):
                 adjacent_spaces = list(gc.all_locations_within(unit_location, 2))
                 adjacent_spaces.remove(unit_location)
                 adjacent_spaces[:] = [space for space in adjacent_spaces if good_bp_loc(space)]
@@ -216,12 +208,11 @@ while True:
                    
             if not doing_action and gc.is_move_ready(unit.id):
                 move_fowards(unit.id)
-
     except Exception as e:
         print('Worker Error:', e)				
         traceback.print_exc()
     
-    try:           
+    try:    #knight code
         for unit in my_knights:
             if unit.location.is_on_map():
                 unit_location = unit.location.map_location()
@@ -234,54 +225,98 @@ while True:
                     nearby_friends = gc.sense_nearby_units_by_team(unit_location, 1, my_team)
                     for friend in nearby_friends:
                         if (friend.unit_type == bc.UnitType.Knight) and (friend.id != unit.id): #spread out
-                            direction = friend.location.map_location().direction_to(unit_location)
-                            move_towards(unit.id, travel_directions[unit.id])
+                            travel_directions[unit.id] = friend.location.map_location().direction_to(unit_location)
+                            move_fowards(unit.id)
                             break                        
     except Exception as e:
         print('Knight Error:', e)				
         traceback.print_exc()
                         
-    try:
+    try:    #ranger code
         for unit in my_rangers:
             if unit.location.is_on_map():
                 unit_location = unit.location.map_location()
-                if gc.research_info().get_level(bc.UnitType.Ranger) > 1:
+                if unit.research_level > 1:
                     nearby_enemies = gc.sense_nearby_units_by_team(unit_location, 100, other_team)
                 else:
                     nearby_enemies = gc.sense_nearby_units_by_team(unit_location, 70, other_team)
-                    
-                if gc.is_attack_ready(unit.id):
-                    for enemy in nearby_enemies:
-                        if gc.can_attack(unit.id, enemy.id):
-                            gc.attack(unit.id, enemy.id)
-                            break
-                if gc.is_move_ready(unit.id):
-                    moved_this_turn = False
+                
+                if len(nearby_enemies) > 0:
                     for enemy in nearby_enemies:
                         enemy_locations.append(enemy.location.map_location())
-                        if unit_location.distance_squared_to(enemy.location.map_location()) > 50:
-                            d = unit_location.direction_to(enemy.location.map_location())                            
-                            if gc.can_move(unit.id, d):
-                                gc.move_robot(unit.id, d)
-                                travel_directions[unit.id] = d
-                                moved_this_turn = True
-                                break
-                        elif unit_location.distance_squared_to(enemy.location.map_location()) < 10:
-                            d = enemy.location.map_location().direction_to(unit_location)                            
-                            if gc.can_move(unit.id, d):
-                                gc.move_robot(unit.id, d)
-                                travel_directions[unit.id] = d
-                                moved_this_turn = True
-                                break
-                    if not moved_this_turn:
-                        if len(enemy_locations) > 0:
-                            target_location = random.choice(enemy_locations)
-                            d = unit_location.direction_to(target_location)
-                            travel_directions[unit.id] = d
-                        #print ("Trying to move")
-                        move_towards(unit.id, travel_directions[unit.id])
+                    if gc.is_attack_ready(unit.id):
+                        attackable_enemies = [enemy for enemy in nearby_enemies if gc.can_attack(unit.id, enemy.id)]
+                        if len(attackable_enemies) > 0:
+                            gc.attack(unit.id, random.choice(attackable_enemies).id)
+                    if gc.is_move_ready(unit.id):
+                        closest_enemy = find_closest(unit, nearby_enemies)
+                        if unit_location.distance_squared_to(closest_enemy.location.map_location()) < 11:
+                            travel_directions[unit.id] = closest_enemy.location.map_location().direction_to(unit_location)
+                        else:
+                            travel_directions[unit.id] = unit_location.direction_to(closest_enemy.location.map_location())                            
+                        move_fowards(unit.id)
+                elif gc.is_move_ready(unit.id):
+                    if len(enemy_locations) > 0:
+                        target_location = random.choice(enemy_locations)
+                        travel_directions[unit.id] = unit_location.direction_to(target_location)
+                    move_fowards(unit.id)
     except Exception as e:
         print('Ranger Error:', e)				
+        traceback.print_exc()
+    
+    try:    #healer code
+        for unit in my_healers:
+            if unit.location.is_on_map():
+                unit_location = unit.location.map_location()
+                
+                nearby_friends = list(gc.sense_nearby_units_by_team(unit_location, 50, my_team))
+                nearby_friends[:] = [friend for friend in nearby_friends if friend.health < friend.max_health]
+                if unit in nearby_friends:
+                    nearby_friends.remove(unit)
+                    
+                if gc.is_heal_ready(unit.id) and len(nearby_friends) > 0:
+                    healable_friends = [friend for friend in nearby_friends if gc.can_heal(unit.id, friend.id)]
+                    if len(healable_friends) > 0:
+                        lowest_friend = find_lowest(healable_friends)
+                        gc.heal(unit.id, lowest_friend.id)
+                            
+                if gc.is_move_ready(unit.id):           
+                    if len(nearby_friends) > 0:        
+                        lowest_friend = find_lowest(nearby_friends)
+                        travel_directions[unit.id] = unit_location.direction_to(lowest_friend.location.map_location())               
+                    elif len(my_rangers) > 0:
+                        lowest_friend = find_lowest(my_rangers)
+                        travel_directions[unit.id] = unit_location.direction_to(lowest_friend.location.map_location())
+                    move_fowards(unit.id)
+    except Exception as e:
+        print('Healer Error:', e)				
+        traceback.print_exc()
+          
+    try:    #mage code
+        for unit in my_mages:
+            if unit.location.is_on_map():
+                unit_location = unit.location.map_location()
+                nearby_enemies = gc.sense_nearby_units_by_team(unit_location, 30, other_team)
+                
+                if len(nearby_enemies) > 0:
+                    for enemy in nearby_enemies:
+                        enemy_locations.append(enemy.location.map_location())
+                    if gc.is_attack_ready(unit.id):
+                        gc.attack(unit.id, random.choice(nearby_enemies).id)
+                    if gc.is_move_ready(unit.id):
+                        if len(nearby_enemies) == 1:
+                            travel_directions[unit.id] = unit_location.direction_to(nearby_enemies[0].location.map_location())   
+                        else:
+                            enemy = random.choice(nearby_enemies)
+                            travel_directions[unit.id] = enemy.location.map_location().direction_to(unit_location)                         
+                        move_fowards(unit.id)
+                elif gc.is_move_ready(unit.id):
+                    if len(enemy_locations) > 0:
+                        target_location = random.choice(enemy_locations)
+                        travel_directions[unit.id] = unit_location.direction_to(target_location)
+                    move_fowards(unit.id)
+    except Exception as e:
+        print('Mage Error:', e)				
         traceback.print_exc()
         
     # send the actions we've performed, and wait for our next turn.
