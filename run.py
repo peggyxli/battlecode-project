@@ -2,16 +2,32 @@ import battlecode as bc
 import random
 import sys
 import traceback
-import os
 
+random.seed(6137)
 gc = bc.GameController()
 directions = list(bc.Direction)
+rotate_mods = [0, -1, 1, -2, 2, -3, 3, -4]
 travel_directions = {}
 factory_loc = []
 new_d = []
-rotate_mods = [0, -1, 1, -2, 2, -3, 3, -4]
+earth_karbonite_locations = []
 
+my_team = gc.team()
+if my_team == bc.Team.Blue:
+    other_team = bc.Team.Red
+else:
+    other_team = bc.Team.Blue
 
+earth_map = gc.starting_map(bc.Planet.Earth)
+test_location = bc.MapLocation(bc.Planet.Earth, 0, 0)
+while test_location.y < earth_map.height:
+    while test_location.x < earth_map.width:
+        if earth_map.initial_karbonite_at(test_location) > 0:
+            earth_karbonite_locations.append(test_location)
+        test_location = test_location.add(bc.Direction.East)
+    test_location = bc.MapLocation(bc.Planet.Earth, 0, test_location.y+1)
+
+        
 def move_fowards(unit_id):
     if unit_id not in travel_directions:
         travel_directions[unit_id] = random.choice(directions)
@@ -22,7 +38,7 @@ def move_fowards(unit_id):
             travel_directions[unit_id] = directions[(d+mod)%8]
             break
 
-def find_closest(unit, myarr, threshold = 200):
+def find_closest_unit(unit, myarr, threshold = 200):
     if len(myarr) > 0:
         loc = unit.location.map_location()
         closest_unit = myarr[0]
@@ -67,7 +83,7 @@ def harvest_nearby(unit):
             return True
     return False
 
-def find_lowest(myarr):
+def find_most_missing(myarr):
     lowest_unit = myarr[0]
     most_missing = 0
     for other in myarr:
@@ -76,12 +92,16 @@ def find_lowest(myarr):
             most_missing = missing_health
             lowest_unit = other
     return lowest_unit
-
     
-random.seed(6137)
+def find_lowest(myarr):
+    lowest_unit = myarr[0]
+    for other in myarr:
+        if other.health < lowest_unit.health:
+            lowest_unit = other
+    return lowest_unit
 
-# let's start off with some research!
-# we can queue as much as we want.
+
+#research
 gc.queue_research(bc.UnitType.Rocket)
 gc.queue_research(bc.UnitType.Ranger)
 gc.queue_research(bc.UnitType.Ranger)
@@ -89,12 +109,10 @@ gc.queue_research(bc.UnitType.Healer)
 gc.queue_research(bc.UnitType.Mage)
 gc.queue_research(bc.UnitType.Healer)
 gc.queue_research(bc.UnitType.Mage)
-
-my_team = gc.team()
-if my_team == bc.Team.Blue:
-    other_team = bc.Team.Red
-else:
-    other_team = bc.Team.Blue
+gc.queue_research(bc.UnitType.Mage) #change later to add snipe
+gc.queue_research(bc.UnitType.Knight)
+gc.queue_research(bc.UnitType.Knight)
+gc.queue_research(bc.UnitType.Ranger)
 
 while True:
     #print('pyround:', gc.round(), 'time left:', gc.get_time_left_ms(), 'ms')
@@ -154,7 +172,7 @@ while True:
                 gc.produce_robot(unit.id, bc.UnitType.Worker)
             elif len(my_factories)*2 > len(my_knights) and gc.can_produce_robot(unit.id, bc.UnitType.Knight):
                 gc.produce_robot(unit.id, bc.UnitType.Knight)
-            elif len(my_rangers)/4 < len(my_healers) and gc.can_produce_robot(unit.id, bc.UnitType.Ranger):
+            elif len(my_rangers) <= len(my_healers)*4 and gc.can_produce_robot(unit.id, bc.UnitType.Ranger):
                 gc.produce_robot(unit.id, bc.UnitType.Ranger)
             elif len(my_healers) <= len(my_mages) and gc.can_produce_robot(unit.id, bc.UnitType.Healer):
                 gc.produce_robot(unit.id, bc.UnitType.Healer)
@@ -189,7 +207,6 @@ while True:
                         if gc.can_unload(unit.id, dir):
                             gc.unload(unit.id, dir)
                             break
-
     except Exception as e:
         print('Factory Error:', e)				
         traceback.print_exc()
@@ -205,14 +222,19 @@ while True:
                             gc.replicate(unit.id, dir)
                             break
                 
-                test_bp = find_closest(unit, my_blueprints, 50)
+                test_bp = find_closest_unit(unit, my_blueprints, 50)
+                #nearby_enemies = gc.sense_nearby_units_by_team(unit_location, unit.vision_range, other_team)
+
+                #if len(nearby_enemies) > 0:
+                #    for enemy in nearby_enemies:
+                #        enemy_locations.append(enemy.location.map_location())
+                #    travel_directions[unit.id] = nearby_enemies[0].location.map_location().direction_to(unit_location)   
                 if test_bp != unit: #if there's a blueprint nearby
                     if gc.can_build(unit.id, test_bp.id):
                         gc.build(unit.id, test_bp.id)
                         doing_action = True
                     else:
                         travel_directions[unit.id] = unit_location.direction_to(test_bp.location.map_location())
-                
                 elif gc.karbonite() > len(my_factories)*25 and gc.karbonite() > bc.UnitType.Factory.blueprint_cost():
                     adjacent_spaces = list(gc.all_locations_within(unit_location, 2))
                     adjacent_spaces.remove(unit_location)
@@ -232,9 +254,33 @@ while True:
                         elif gc.can_blueprint(unit.id, bc.UnitType.Factory, unit_location.direction_to(bp_space)):
                             gc.blueprint(unit.id, bc.UnitType.Factory, unit_location.direction_to(bp_space))
                             doing_action = True
-                    
+                            
                 elif harvest_nearby(unit):
+                    karb_loc = unit_location.add(travel_directions[unit.id])
+                    if gc.karbonite_at(karb_loc) == 0:
+                        earth_karbonite_locations.remove(karb_loc)
                     doing_action = True
+                elif len(earth_karbonite_locations) > 0:
+                    done_searching = False
+                    while not done_searching and len(earth_karbonite_locations) > 0:
+                        closest_karb_loc = earth_karbonite_locations[0]
+                        closest_dist = unit_location.distance_squared_to(closest_karb_loc)
+                        for loc in earth_karbonite_locations:
+                            test_dist = unit_location.distance_squared_to(loc)
+                            if test_dist < closest_dist:
+                                closest_karb_loc = loc
+                                closest_dist = test_dist
+                        if gc.can_sense_location(closest_karb_loc):
+                            if gc.karbonite_at(closest_karb_loc) > 0:
+                                travel_directions[unit.id] = unit_location.direction_to(closest_karb_loc)
+                                done_searching = True
+                            else:
+                                earth_karbonite_locations.remove(closest_karb_loc)
+                        else:
+                            travel_directions[unit.id] = unit_location.direction_to(closest_karb_loc)
+                            done_searching = True
+
+                #    print('pyround:', gc.round(), 'time left:', gc.get_time_left_ms(), 'ms')
                     
                 if not doing_action and gc.is_move_ready(unit.id):
                     harvest_nearby(unit)
@@ -276,9 +322,10 @@ while True:
                 if gc.is_attack_ready(unit.id):
                     attackable_enemies = [enemy for enemy in nearby_enemies if gc.can_attack(unit.id, enemy.id)]
                     if len(attackable_enemies) > 0:
-                        gc.attack(unit.id, random.choice(attackable_enemies).id)
+                        lowest_enemy = find_lowest(attackable_enemies)
+                        gc.attack(unit.id, lowest_enemy.id)
                 if gc.is_move_ready(unit.id):
-                    closest_enemy = find_closest(unit, nearby_enemies)
+                    closest_enemy = find_closest_unit(unit, nearby_enemies)
                     if unit_location.distance_squared_to(closest_enemy.location.map_location()) < 11:
                         travel_directions[unit.id] = closest_enemy.location.map_location().direction_to(unit_location)
                     else:
@@ -305,15 +352,15 @@ while True:
             if gc.is_heal_ready(unit.id) and len(nearby_friends) > 0:
                 healable_friends = [friend for friend in nearby_friends if gc.can_heal(unit.id, friend.id)]
                 if len(healable_friends) > 0:
-                    lowest_friend = find_lowest(healable_friends)
+                    lowest_friend = find_most_missing(healable_friends)
                     gc.heal(unit.id, lowest_friend.id)
                         
             if gc.is_move_ready(unit.id):           
                 if len(nearby_friends) > 0:        
-                    lowest_friend = find_lowest(nearby_friends)
+                    lowest_friend = find_most_missing(nearby_friends)
                     travel_directions[unit.id] = unit_location.direction_to(lowest_friend.location.map_location())               
                 elif len(my_rangers) > 0:
-                    lowest_friend = find_lowest(my_rangers)
+                    lowest_friend = find_most_missing(my_rangers)
                     travel_directions[unit.id] = unit_location.direction_to(lowest_friend.location.map_location())
                 move_fowards(unit.id)
     except Exception as e:
@@ -329,13 +376,15 @@ while True:
                 for enemy in nearby_enemies:
                     enemy_locations.append(enemy.location.map_location())
                 if gc.is_attack_ready(unit.id):
-                    gc.attack(unit.id, random.choice(nearby_enemies).id)
+                    lowest_enemy = find_lowest(nearby_enemies)
+                    gc.attack(unit.id, lowest_enemy.id)
                 if gc.is_move_ready(unit.id):
-                    if len(nearby_enemies) == 1:
-                        travel_directions[unit.id] = unit_location.direction_to(nearby_enemies[0].location.map_location())   
+                    nearby_friends = gc.sense_nearby_units_by_team(unit_location, unit.vision_range, my_team) 
+                    enemy = random.choice(nearby_enemies)
+                    if len(nearby_enemies) > len(nearby_friends):    
+                        travel_directions[unit.id] = enemy.location.map_location().direction_to(unit_location)      
                     else:
-                        enemy = random.choice(nearby_enemies)
-                        travel_directions[unit.id] = enemy.location.map_location().direction_to(unit_location)                         
+                        travel_directions[unit.id] = unit_location.direction_to(enemy.location.map_location())   
                     move_fowards(unit.id)
             elif gc.is_move_ready(unit.id):
                 if len(enemy_locations) > 0:
