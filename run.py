@@ -38,7 +38,7 @@ def move_fowards(unit_id):
             travel_directions[unit_id] = directions[(d+mod)%8]
             break
 
-def find_closest_unit(unit, myarr, threshold = 200):
+def find_closest_unit(unit, myarr):
     if len(myarr) > 0:
         loc = unit.location.map_location()
         closest_unit = myarr[0]
@@ -48,8 +48,7 @@ def find_closest_unit(unit, myarr, threshold = 200):
             if test_dist < closest_dist:
                 closest_unit = other
                 closest_dist = test_dist
-        if closest_dist <= threshold:   #for worker search
-            return closest_unit
+        return closest_unit
     return unit
             
 def good_bp_loc(location):
@@ -123,42 +122,25 @@ while True:
             new_unit = gc.sense_unit_at_location(new_location)
             travel_directions[new_unit.id] = new_d[0] 
         new_d.pop(0)
-
-    my_factories = []
-    my_rockets = []
+    
+    
+    my_units = [[] for x in range(len(bc.UnitType))]
     my_blueprints = []
-    my_workers = []
-    my_knights = []
-    my_rangers = []
-    my_mages = []
-    my_healers = []
     enemy_locations = []
     
     for unit in gc.my_units():
         if unit.location.is_on_map():
-            if unit.unit_type == bc.UnitType.Factory:
+            if unit.unit_type == bc.UnitType.Factory or unit.unit_type == bc.UnitType.Rocket:
                 if unit.structure_is_built():
-                    my_factories.append(unit)
+                    my_units[unit.unit_type].append(unit)
                 else:
                     my_blueprints.append(unit)
-            elif unit.unit_type == bc.UnitType.Rocket:
-                if unit.structure_is_built():
-                    my_rockets.append(unit)
-                else:
-                    my_blueprints.append(unit)
-            elif unit.unit_type == bc.UnitType.Worker:
-                my_workers.append(unit)
-            elif unit.unit_type == bc.UnitType.Knight:
-                my_knights.append(unit)
-            elif unit.unit_type == bc.UnitType.Ranger:
-                my_rangers.append(unit)
-            elif unit.unit_type == bc.UnitType.Healer:
-                my_healers.append(unit)
-            elif unit.unit_type == bc.UnitType.Mage:
-                my_mages.append(unit)
+            else:
+                my_units[unit.unit_type].append(unit)
+    
     
     try:    #factory code
-        for unit in my_factories:
+        for unit in my_units[bc.UnitType.Factory]:
             unit_location = unit.location.map_location()
             garrison = unit.structure_garrison()
             if len(garrison) > 0:
@@ -168,13 +150,13 @@ while True:
                         factory_loc.append(unit_location)
                         new_d.append(d)
                         break
-            elif len(my_workers) < 3 and gc.can_produce_robot(unit.id, bc.UnitType.Worker):
+            elif len(my_units[bc.UnitType.Worker]) < 3 and gc.can_produce_robot(unit.id, bc.UnitType.Worker):
                 gc.produce_robot(unit.id, bc.UnitType.Worker)
-            elif len(my_factories)*2 > len(my_knights) and gc.can_produce_robot(unit.id, bc.UnitType.Knight):
+            elif len(my_units[bc.UnitType.Factory])*2 > len(my_units[bc.UnitType.Knight]) and gc.can_produce_robot(unit.id, bc.UnitType.Knight):
                 gc.produce_robot(unit.id, bc.UnitType.Knight)
-            elif len(my_rangers) <= len(my_healers)*4 and gc.can_produce_robot(unit.id, bc.UnitType.Ranger):
+            elif len(my_units[bc.UnitType.Ranger]) <= len(my_units[bc.UnitType.Healer])*4 and gc.can_produce_robot(unit.id, bc.UnitType.Ranger):
                 gc.produce_robot(unit.id, bc.UnitType.Ranger)
-            elif len(my_healers) <= len(my_mages) and gc.can_produce_robot(unit.id, bc.UnitType.Healer):
+            elif len(my_units[bc.UnitType.Healer]) <= len(my_units[bc.UnitType.Mage]) and gc.can_produce_robot(unit.id, bc.UnitType.Healer):
                 gc.produce_robot(unit.id, bc.UnitType.Healer)
             elif gc.can_produce_robot(unit.id, bc.UnitType.Mage):
                 gc.produce_robot(unit.id, bc.UnitType.Mage)            
@@ -182,8 +164,9 @@ while True:
         print('Factory Error:', e)				
         traceback.print_exc()            
     
+    
     try:    #rocket code
-        for unit in my_rockets:
+        for unit in my_units[bc.UnitType.Rocket]:
             unit_location = unit.location.map_location()
             garrison = unit.structure_garrison()
             if unit_location.planet == bc.Planet.Earth:
@@ -211,31 +194,30 @@ while True:
         print('Factory Error:', e)				
         traceback.print_exc()
     
+    
     try:    #worker code
-        for unit in my_workers:
+        for unit in my_units[bc.UnitType.Worker]:
             unit_location = unit.location.map_location()
             if unit_location.planet == bc.Planet.Earth:
                 doing_action = False
-                if len(my_workers) < len(my_factories)*2 or len(my_workers) < 3:
+                if len(my_units[bc.UnitType.Worker]) < len(my_units[bc.UnitType.Factory])*2 or len(my_units[bc.UnitType.Worker]) < 3:
                     for dir in directions:
                         if gc.can_replicate(unit.id, dir):
                             gc.replicate(unit.id, dir)
                             break
                 
-                test_bp = find_closest_unit(unit, my_blueprints, 50)
-                #nearby_enemies = gc.sense_nearby_units_by_team(unit_location, unit.vision_range, other_team)
-
-                #if len(nearby_enemies) > 0:
-                #    for enemy in nearby_enemies:
-                #        enemy_locations.append(enemy.location.map_location())
-                #    travel_directions[unit.id] = nearby_enemies[0].location.map_location().direction_to(unit_location)   
-                if test_bp != unit: #if there's a blueprint nearby
-                    if gc.can_build(unit.id, test_bp.id):
-                        gc.build(unit.id, test_bp.id)
+                #build nearby blueprints first
+                nearby_blueprints = [bp for bp in my_blueprints if unit_location.distance_squared_to(bp.location.map_location()) < 20]
+                if len(nearby_blueprints) > 0:
+                    my_bp = find_closest_unit(unit, nearby_blueprints)
+                    if gc.can_build(unit.id, my_bp.id):
+                        gc.build(unit.id, my_bp.id)
                         doing_action = True
                     else:
-                        travel_directions[unit.id] = unit_location.direction_to(test_bp.location.map_location())
-                elif gc.karbonite() > len(my_factories)*25 and gc.karbonite() > bc.UnitType.Factory.blueprint_cost():
+                        travel_directions[unit.id] = unit_location.direction_to(my_bp.location.map_location())
+                
+                #then try to blueprint
+                elif gc.karbonite() > len(my_units[bc.UnitType.Factory])*25 and gc.karbonite() > bc.UnitType.Factory.blueprint_cost():
                     adjacent_spaces = list(gc.all_locations_within(unit_location, 2))
                     adjacent_spaces.remove(unit_location)
                     adjacent_spaces[:] = [space for space in adjacent_spaces if good_bp_loc(space) and gc.is_occupiable(space)]
@@ -247,14 +229,15 @@ while True:
                         else:
                             bp_space = random.choice(adjacent_spaces)
                         
-                        if gc.research_info().get_level(bc.UnitType.Rocket) > 0 and (len(my_factories)/4 > len(my_rockets)):
+                        if gc.research_info().get_level(bc.UnitType.Rocket) > 0 and (len(my_units[bc.UnitType.Factory])/4 > len(my_units[bc.UnitType.Rocket])):
                             if gc.can_blueprint(unit.id, bc.UnitType.Rocket, unit_location.direction_to(bp_space)):
                                 gc.blueprint(unit.id, bc.UnitType.Rocket, unit_location.direction_to(bp_space))
                                 doing_action = True
                         elif gc.can_blueprint(unit.id, bc.UnitType.Factory, unit_location.direction_to(bp_space)):
                             gc.blueprint(unit.id, bc.UnitType.Factory, unit_location.direction_to(bp_space))
                             doing_action = True
-                            
+                
+                #then try to harvest            
                 elif harvest_nearby(unit):
                     karb_loc = unit_location.add(travel_directions[unit.id])
                     if gc.karbonite_at(karb_loc) == 0:
@@ -279,8 +262,6 @@ while True:
                         else:
                             travel_directions[unit.id] = unit_location.direction_to(closest_karb_loc)
                             done_searching = True
-
-                #    print('pyround:', gc.round(), 'time left:', gc.get_time_left_ms(), 'ms')
                     
                 if not doing_action and gc.is_move_ready(unit.id):
                     harvest_nearby(unit)
@@ -293,7 +274,7 @@ while True:
         traceback.print_exc()
     
     try:    #knight code
-        for unit in my_knights:
+        for unit in my_units[bc.UnitType.Knight]:
             unit_location = unit.location.map_location()
             nearby_enemies = gc.sense_nearby_units_by_team(unit_location, 2, other_team)
             for enemy in nearby_enemies:
@@ -312,7 +293,7 @@ while True:
         traceback.print_exc()
                         
     try:    #ranger code
-        for unit in my_rangers:
+        for unit in my_units[bc.UnitType.Ranger]:
             unit_location = unit.location.map_location()
             nearby_enemies = gc.sense_nearby_units_by_team(unit_location, unit.vision_range, other_team)
             
@@ -341,7 +322,7 @@ while True:
         traceback.print_exc()
     
     try:    #healer code
-        for unit in my_healers:
+        for unit in my_units[bc.UnitType.Healer]:
             unit_location = unit.location.map_location()
             
             nearby_friends = list(gc.sense_nearby_units_by_team(unit_location, unit.vision_range, my_team))
@@ -359,8 +340,8 @@ while True:
                 if len(nearby_friends) > 0:        
                     lowest_friend = find_most_missing(nearby_friends)
                     travel_directions[unit.id] = unit_location.direction_to(lowest_friend.location.map_location())               
-                elif len(my_rangers) > 0:
-                    lowest_friend = find_most_missing(my_rangers)
+                elif len(my_units[bc.UnitType.Ranger]) > 0:
+                    lowest_friend = find_most_missing(my_units[bc.UnitType.Ranger])
                     travel_directions[unit.id] = unit_location.direction_to(lowest_friend.location.map_location())
                 move_fowards(unit.id)
     except Exception as e:
@@ -368,7 +349,7 @@ while True:
         traceback.print_exc()
           
     try:    #mage code
-        for unit in my_mages:
+        for unit in my_units[bc.UnitType.Mage]:
             unit_location = unit.location.map_location()
             nearby_enemies = gc.sense_nearby_units_by_team(unit_location, unit.vision_range, other_team)
             
