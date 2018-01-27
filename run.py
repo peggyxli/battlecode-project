@@ -50,7 +50,19 @@ def find_closest_unit(unit, myarr):
                 closest_dist = test_dist
         return closest_unit
     return unit
-            
+
+def find_closest_loc(unit_loc, myarr):
+    if len(myarr) > 0:
+        closest_loc = myarr[0]
+        closest_dist = 250
+        for other_loc in myarr:
+            test_dist = unit_loc.distance_squared_to(other_loc) 
+            if test_dist < closest_dist:
+                closest_loc = other_loc
+                closest_dist = test_dist
+        return closest_loc
+    return unit_loc
+    
 def good_bp_loc(location):
     if not gc.starting_map(bc.Planet.Earth).is_passable_terrain_at(location):
         return False
@@ -74,14 +86,21 @@ def worker_nearby(location):
         return True
     return False
     
-def harvest_nearby(unit): 
+def harvest_adj(unit): 
     for dir in directions:
         if gc.can_harvest(unit.id, dir):
             gc.harvest(unit.id, dir)
             travel_directions[unit.id] = dir
             return True
     return False
-
+    
+def find_adj_karb(unit_loc): 
+    adj_spaces = gc.all_locations_within(unit_loc, 2)
+    for space in adj_spaces:
+        if gc.karbonite_at(space) > 0:
+            return space
+    return unit_loc
+    
 def find_most_missing(myarr):
     lowest_unit = myarr[0]
     most_missing = 0
@@ -115,6 +134,14 @@ gc.queue_research(bc.UnitType.Ranger)
 
 while True:
     #print('pyround:', gc.round(), 'time left:', gc.get_time_left_ms(), 'ms')
+    vis_karb_locations = [loc for loc in earth_karbonite_locations if gc.can_sense_location(loc)]
+    if len(vis_karb_locations) > 0:
+        empty_karb_loc = [loc for loc in vis_karb_locations if gc.karbonite_at(loc)]
+        for loc in empty_karb_loc:
+            vis_karb_locations.remove(loc)
+            earth_karbonite_locations.remove(loc)
+    
+    
     while len(factory_loc) > 0: #adding travel directions to new units
         new_location = factory_loc[0].add(new_d[0])
         factory_loc.pop(0)
@@ -198,6 +225,8 @@ while True:
     try:    #worker code
         for unit in my_units[bc.UnitType.Worker]:
             unit_location = unit.location.map_location()
+            target_loc = unit_location
+            
             if unit_location.planet == bc.Planet.Earth:
                 doing_action = False
                 if len(my_units[bc.UnitType.Worker]) < len(my_units[bc.UnitType.Factory])*2 or len(my_units[bc.UnitType.Worker]) < 3:
@@ -238,36 +267,24 @@ while True:
                             doing_action = True
                 
                 #then try to harvest            
-                elif harvest_nearby(unit):
-                    karb_loc = unit_location.add(travel_directions[unit.id])
-                    if gc.karbonite_at(karb_loc) == 0:
-                        earth_karbonite_locations.remove(karb_loc)
-                    doing_action = True
-                elif len(earth_karbonite_locations) > 0:
-                    done_searching = False
-                    while not done_searching and len(earth_karbonite_locations) > 0:
-                        closest_karb_loc = earth_karbonite_locations[0]
-                        closest_dist = unit_location.distance_squared_to(closest_karb_loc)
-                        for loc in earth_karbonite_locations:
-                            test_dist = unit_location.distance_squared_to(loc)
-                            if test_dist < closest_dist:
-                                closest_karb_loc = loc
-                                closest_dist = test_dist
-                        if gc.can_sense_location(closest_karb_loc):
-                            if gc.karbonite_at(closest_karb_loc) > 0:
-                                travel_directions[unit.id] = unit_location.direction_to(closest_karb_loc)
-                                done_searching = True
-                            else:
-                                earth_karbonite_locations.remove(closest_karb_loc)
-                        else:
-                            travel_directions[unit.id] = unit_location.direction_to(closest_karb_loc)
-                            done_searching = True
+                else:   #priority: adjacent, visible, then known
+                    target_loc = find_adj_karb(unit_location)
+                    if target_loc != unit_location:    #if there is karbonite at an adjacent space
+                        if gc.can_harvest(unit.id, unit_location.direction_to(target_loc)):
+                            gc.harvest(unit.id, unit_location.direction_to(target_loc))
+                        doing_action = True
+                    elif len(vis_karb_locations) > 0:
+                        target_loc = find_closest_loc(unit_loc, vis_karb_locations)
+                        travel_directions[unit.id] = unit_location.direction_to(target_loc)
+                    elif len(earth_karbonite_locations) > 0:
+                        target_loc = find_closest_loc(unit_loc, earth_karbonite_locations)
+                        travel_directions[unit.id] = unit_location.direction_to(target_loc)
                     
                 if not doing_action and gc.is_move_ready(unit.id):
-                    harvest_nearby(unit)
+                    harvest_adj(unit)
                     move_fowards(unit.id)
             
-            elif not harvest_nearby(unit) and gc.is_move_ready(unit.id):
+            elif not harvest_adj(unit) and gc.is_move_ready(unit.id):
                 move_fowards(unit.id)
     except Exception as e:
         print('Worker Error:', e)				
@@ -314,8 +331,8 @@ while True:
                     move_fowards(unit.id)
             elif gc.is_move_ready(unit.id):
                 if len(enemy_locations) > 0:
-                    target_location = random.choice(enemy_locations)
-                    travel_directions[unit.id] = unit_location.direction_to(target_location)
+                    target_loc = random.choice(enemy_locations)
+                    travel_directions[unit.id] = unit_location.direction_to(target_loc)
                 move_fowards(unit.id)
     except Exception as e:
         print('Ranger Error:', e)				
@@ -369,8 +386,8 @@ while True:
                     move_fowards(unit.id)
             elif gc.is_move_ready(unit.id):
                 if len(enemy_locations) > 0:
-                    target_location = random.choice(enemy_locations)
-                    travel_directions[unit.id] = unit_location.direction_to(target_location)
+                    target_loc = random.choice(enemy_locations)
+                    travel_directions[unit.id] = unit_location.direction_to(target_loc)
                 move_fowards(unit.id)
     except Exception as e:
         print('Mage Error:', e)				
