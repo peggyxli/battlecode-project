@@ -2,11 +2,11 @@ import battlecode as bc
 from heapq import *
 
 
-my_map = []
-closed_nodes = []
+earth_map = []
+mars_map = []
 width = 0
 height = 0
-planet = bc.Planet.Earth
+closed_nodes = []
 
 
 class Node:
@@ -27,26 +27,43 @@ class Node:
         
 
 def make_map(planet_map):
-    global my_map, width, height, planet
+    global earth_map, mars_map, width, height
     width = planet_map.width
     height = planet_map.height
     planet = planet_map.planet
-    my_map = [[0 for x in range(width)] for y in range(height)]
-    test_location = bc.MapLocation(planet, 0, 0)
-    while test_location.y < height:
-        while test_location.x < width:
-            if not planet_map.is_passable_terrain_at(test_location):
-                my_map[test_location.x][test_location.y] = -1
-            test_location = test_location.add(bc.Direction.East)
-        test_location = bc.MapLocation(planet, 0, test_location.y+1)
-
     
+    if planet == bc.Planet.Earth:
+        earth_map = [[0 for y in range(height)] for x in range(width)]
+        test_location = bc.MapLocation(planet, 0, 0)
+        while test_location.y < height:
+            while test_location.x < width:
+                if not planet_map.is_passable_terrain_at(test_location):
+                    earth_map[test_location.x][test_location.y] = -1
+                test_location = test_location.add(bc.Direction.East)
+            test_location = bc.MapLocation(planet, 0, test_location.y+1)
+    
+    elif planet == bc.Planet.Mars:
+        mars_map = [[0 for y in range(height)] for x in range(width)]
+        test_location = bc.MapLocation(planet, 0, 0)
+        while test_location.y < height:
+            while test_location.x < width:
+                if not planet_map.is_passable_terrain_at(test_location):
+                    mars_map[test_location.x][test_location.y] = -1
+                test_location = test_location.add(bc.Direction.East)
+            test_location = bc.MapLocation(planet, 0, test_location.y+1)
+
+            
 def find_path(start_loc, end_loc):
     global closed_nodes
-    temp_map = [row[:] for row in my_map]
     my_node = Node(start_loc.x, start_loc.y, end_loc)
     open_nodes = []
     my_nodes = []
+    
+    planet = start_loc.planet
+    if planet == bc.Planet.Earth:
+        temp_map = [row[:] for row in earth_map]
+    else:
+        temp_map = [row[:] for row in mars_map]
     
     while my_node.x != end_loc.x or my_node.y != end_loc.y:
         closed_nodes.append(my_node)
@@ -60,10 +77,15 @@ def find_path(start_loc, end_loc):
                         if(temp_map[i][j] == 0):
                             heappush(open_nodes, Node(i, j, end_loc, my_index))
                             
-        while temp_map[open_nodes[0].x][open_nodes[0].y] != 0 and len(open_nodes) > 0:
-            heappop(open_nodes)
+        while len(open_nodes) > 0:
+            if temp_map[open_nodes[0].x][open_nodes[0].y] == 0:
+                break
+            else:
+                heappop(open_nodes)
         if len(open_nodes) == 0:
             print("No path could be found")
+            print("unit loc:", start_loc)
+            print("target loc:", end_loc)
             return my_nodes
         else:
             my_node = heappop(open_nodes)
@@ -71,5 +93,6 @@ def find_path(start_loc, end_loc):
     while my_node.parent_index != -1:
         my_nodes.append(bc.MapLocation(planet, my_node.x, my_node.y))
         my_node = closed_nodes[my_node.parent_index]
-    my_nodes.reverse()
+    
+    closed_nodes.clear()
     return my_nodes
