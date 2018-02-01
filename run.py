@@ -3,17 +3,22 @@ import random
 import sys
 import traceback
 import pathing
+from math import floor
+from math import sqrt
 
 random.seed(6137)
 gc = bc.GameController()
-directions = list(bc.Direction)
+directions_with_center = list(bc.Direction)
+directions = directions_with_center[:-1]
 rotate_mods = [0, -1, 1, -2, 2, -3, 3, -4]
+forward_mods = [0, -1, 1, -2, 2]
 travel_directions = {}
 my_paths = {}
 nearby_enemies = {}
 factory_loc = []
 new_d = []
 earth_karbonite_locations = []
+pref_enemy_types = [bc.UnitType.Ranger, bc.UnitType.Mage, bc.UnitType.Healer]
 
 my_team = gc.team()
 if my_team == bc.Team.Blue:
@@ -23,17 +28,19 @@ else:
 
 earth_map = gc.starting_map(bc.Planet.Earth)
 pathing.make_map(earth_map)
+earth_center = bc.MapLocation(bc.Planet.Earth, floor(earth_map.width/2), floor(earth_map.height/2))
+while pathing.earth_map[earth_center.x][earth_center.y] == -1:
+    earth_center = earth_center.add(random.choice(directions))
+earth_karbonite_locations = pathing.earth_karb_loc
+max_workers = len(earth_karbonite_locations)/20
+if max_workers < 8:
+    max_workers = 8
+elif max_workers > (earth_map.height + earth_map.width)/2:
+    max_workers = (earth_map.height + earth_map.width)/2
+    
+mars_map = gc.starting_map(bc.Planet.Mars)
 pathing.make_map(gc.starting_map(bc.Planet.Mars))
-
-test_location = bc.MapLocation(bc.Planet.Earth, 0, 0)
-while test_location.y < earth_map.height:
-    while test_location.x < earth_map.width:
-        if earth_map.initial_karbonite_at(test_location) > 0:
-            earth_karbonite_locations.append(test_location)
-        test_location = test_location.add(bc.Direction.East)
-    test_location = bc.MapLocation(bc.Planet.Earth, 0, test_location.y+1)
-
-print (len(earth_karbonite_locations))
+mars_center = bc.MapLocation(bc.Planet.Mars, pathing.mars_center[0], pathing.mars_center[1])
         
 def move_fowards(unit_id):
     if unit_id not in travel_directions:
@@ -46,24 +53,35 @@ def move_fowards(unit_id):
             break
             
 def move_along_path(unit):
-    unit_loc = unit.location.map_location()
-    if len(my_paths[unit.id]) == 0:
-        d = random.choice(directions)
-    elif my_paths[unit.id][-1].planet != unit_loc.planet:
-        my_paths[unit.id].clear()
-        d = random.choice(directions)
-    else:
-        d = unit_loc.direction_to(my_paths[unit.id][-1])
-    
-    for mod in rotate_mods:
-        if gc.can_move(unit.id, directions[(d+mod)%8]):
-            gc.move_robot(unit.id, directions[(d+mod)%8])
-            break
-            
-    if unit.id in my_paths:
+    if gc.is_move_ready(unit.id):
+        unit_loc = unit.location.map_location()
+        if len(my_paths[unit.id]) == 0:
+            d = random.choice(directions)
+        elif my_paths[unit.id][-1].planet != unit_loc.planet:
+            my_paths[unit.id].clear()
+            d = random.choice(directions)
+        else:
+            d = unit_loc.direction_to(my_paths[unit.id][-1])
+        
+        for mod in forward_mods:
+            if gc.can_move(unit.id, directions[(d+mod)%8]):
+                gc.move_robot(unit.id, directions[(d+mod)%8])
+                break
+                
         if len(my_paths[unit.id]) > 0:
-            if unit.location.map_location() == my_paths[unit.id][-1]:
-                my_paths[unit.id].pop()      
+            if my_paths[unit.id][-1].distance_squared_to(unit.location.map_location()) < 3:
+                my_paths[unit.id].pop()
+            else:
+                adjacent_spaces = list(gc.all_locations_within(unit_loc, 2))
+                adjacent_spaces.remove(unit_loc)
+                adjacent_spaces[:] = [space for space in adjacent_spaces if space in my_paths[unit.id]]
+                if len(adjacent_spaces) > 0:
+                    while len(adjacent_spaces) > 1:
+                        if my_paths[unit.id][-1] in adjacent_spaces:
+                            adjacent_spaces.remove(my_paths[unit.id][-1])
+                        my_paths[unit.id].pop()
+                    while not my_paths[unit.id][-1] in adjacent_spaces:
+                        my_paths[unit.id].pop()                       
 
 def find_closest_unit(unit, myarr):
     if len(myarr) > 0:
@@ -114,19 +132,12 @@ def worker_nearby(location):
     return False
     
 def harvest_adj(unit): 
-    for dir in directions:
+    for dir in directions_with_center:
         if gc.can_harvest(unit.id, dir):
             gc.harvest(unit.id, dir)
             travel_directions[unit.id] = dir
             return True
     return False
-    
-def find_adj_karb(unit_loc): 
-    adj_spaces = gc.all_locations_within(unit_loc, 2)
-    for space in adj_spaces:
-        if gc.karbonite_at(space) > 0:
-            return space
-    return unit_loc
     
 def find_most_missing(myarr):
     lowest_unit = myarr[0]
@@ -145,6 +156,14 @@ def find_lowest(myarr):
             lowest_unit = other
     return lowest_unit
 
+def find_path_to_center(unit):
+    global earth_center, mars_center
+    unit_loc = unit.location.map_location()
+    if unit_loc.planet == bc.Planet.Earth:
+        my_paths[unit.id] = pathing.find_path(unit_loc, earth_center)
+    else:
+        my_paths[unit.id] = pathing.find_path(unit_loc, mars_center)
+    
 
 #research
 gc.queue_research(bc.UnitType.Worker)
@@ -162,7 +181,7 @@ gc.queue_research(bc.UnitType.Ranger)
 gc.queue_research(bc.UnitType.Healer)
 
 while True:
-    print('pyround:', gc.round(), 'time left:', gc.get_time_left_ms(), 'ms')
+    #print('pyround:', gc.round(), 'time left:', gc.get_time_left_ms(), 'ms')
     vis_karb_locations = [loc for loc in earth_karbonite_locations if gc.can_sense_location(loc)]
     if len(vis_karb_locations) > 0:
         empty_karb_loc = [loc for loc in vis_karb_locations if gc.karbonite_at(loc) == 0]
@@ -170,21 +189,11 @@ while True:
             vis_karb_locations.remove(loc)
             earth_karbonite_locations.remove(loc)
     
-    
-    while len(factory_loc) > 0: #adding travel directions to new units
-        new_location = factory_loc[0].add(new_d[0])
-        factory_loc.pop(0)
-        if gc.has_unit_at_location(new_location):
-            new_unit = gc.sense_unit_at_location(new_location)
-            travel_directions[new_unit.id] = new_d[0] 
-        new_d.pop(0)
-    
-    
     my_units = [[] for x in range(len(bc.UnitType))]
     my_blueprints = []
     mars_rockets = []
-    enemy_locations = []
     all_vis_enemies = []
+    move_to_mars = False
     
     for unit in gc.my_units():
         if unit.location.is_on_map():
@@ -210,6 +219,9 @@ while True:
                     my_paths[unit.id] = []
                 my_units[unit.unit_type].append(unit)
     
+    if (gc.round() > 250 and len(all_vis_enemies) > 0) or gc.get_time_left_ms() < 2000:
+        move_to_mars = True
+    
     try:    #factory code
         for unit in my_units[bc.UnitType.Factory]:
             unit_loc = unit.location.map_location()
@@ -218,13 +230,11 @@ while True:
                 for d in directions:
                     if gc.can_unload(unit.id, d):
                         gc.unload(unit.id, d)
-                        factory_loc.append(unit_loc)
-                        new_d.append(d)
                         break
             
             if len(my_units[bc.UnitType.Worker]) < 8 and gc.can_produce_robot(unit.id, bc.UnitType.Worker):
                 gc.produce_robot(unit.id, bc.UnitType.Worker)
-            elif gc.round() < 250 or len(all_vis_enemies) > 0:
+            elif not move_to_mars:
                 if len(my_units[bc.UnitType.Ranger]) <= len(my_units[bc.UnitType.Healer])*4 and gc.can_produce_robot(unit.id, bc.UnitType.Ranger):
                     gc.produce_robot(unit.id, bc.UnitType.Ranger)
                 elif len(my_units[bc.UnitType.Healer]) <= len(my_units[bc.UnitType.Mage]) and gc.can_produce_robot(unit.id, bc.UnitType.Healer):
@@ -234,30 +244,6 @@ while True:
     except Exception as e:
         print('Factory Error:', e)				
         traceback.print_exc()            
-    
-    
-    try:    #earth rocket code
-        for unit in my_units[bc.UnitType.Rocket]:
-            unit_loc = unit.location.map_location()
-            garrison = unit.structure_garrison()
-            if len(garrison) < unit.structure_max_capacity():
-                nearby_friends = gc.sense_nearby_units_by_team(unit_loc, 2, my_team)
-                for friend in nearby_friends:
-                    if gc.can_load(unit.id, friend.id) and len(garrison) < unit.structure_max_capacity():
-                        gc.load(unit.id, friend.id)
-                        my_paths[friend.id] = []
-            if len(garrison) == unit.structure_max_capacity() or gc.round() == 740:
-                maxX = gc.starting_map(bc.Planet.Mars).width - 1
-                maxY = gc.starting_map(bc.Planet.Mars).height - 1
-                testX = random.randint(0, maxX)
-                testY = random.randint(0, maxY)
-                while not gc.can_launch_rocket(unit.id, bc.MapLocation(bc.Planet.Mars, testX, testY)):
-                    testX = random.randint(0, maxX)
-                    testY = random.randint(0, maxY)
-                gc.launch_rocket(unit.id, bc.MapLocation(bc.Planet.Mars, testX, testY))
-    except Exception as e:
-        print('Rocket Error:', e)				
-        traceback.print_exc()
     
     
     try:    #mars rocket code
@@ -280,7 +266,7 @@ while True:
             if unit_loc.planet == bc.Planet.Earth:
                 keep_moving = True
                 harvest_stuff = True
-                if len(my_units[bc.UnitType.Worker]) < 8 or len(my_units[bc.UnitType.Worker]) < len(earth_karbonite_locations)/20:
+                if len(my_units[bc.UnitType.Worker]) < max_workers:
                     for dir in directions:
                         if gc.can_replicate(unit.id, dir):
                             gc.replicate(unit.id, dir)
@@ -324,26 +310,17 @@ while True:
                 
                 #then try to harvest            
                 if harvest_stuff and keep_moving:   #priority: adjacent, visible, then known
-                    target_loc = find_adj_karb(unit_loc)
-                    if gc.karbonite_at(target_loc) != 0:    #if there is karbonite at an adjacent space
-                        if gc.can_harvest(unit.id, unit_loc.direction_to(target_loc)):
-                            gc.harvest(unit.id, unit_loc.direction_to(target_loc))
-                        keep_moving = False
-                    elif len(vis_karb_locations) > 0:
-                        target_loc = find_closest_loc(unit_loc, vis_karb_locations)
-                        my_paths[unit.id] = pathing.find_path(unit_loc, target_loc)
-                        while len(my_paths[unit.id]) == 0 and len(vis_karb_locations) > 0:
-                            print(unit_loc, "no path to vis", target_loc)
-                            vis_karb_locations.remove(target_loc)
-                            earth_karbonite_locations.remove(target_loc)
+                    for dir in directions_with_center:
+                        if gc.can_harvest(unit.id, dir):
+                            gc.harvest(unit.id, dir)
+                            keep_moving = False
+                            break
+                    
+                    if keep_moving and len(my_paths[unit.id]) == 0:
+                        if len(vis_karb_locations) > 0:
                             target_loc = find_closest_loc(unit_loc, vis_karb_locations)
                             my_paths[unit.id] = pathing.find_path(unit_loc, target_loc)
-                    elif len(earth_karbonite_locations) > 0:
-                        target_loc = find_closest_loc(unit_loc, earth_karbonite_locations)
-                        my_paths[unit.id] = pathing.find_path(unit_loc, target_loc)
-                        while len(my_paths[unit.id]) == 0 and len(earth_karbonite_locations) > 0:
-                            print("no path to global", target_loc)
-                            earth_karbonite_locations.remove(target_loc)
+                        elif len(earth_karbonite_locations) > 0:
                             target_loc = find_closest_loc(unit_loc, earth_karbonite_locations)
                             my_paths[unit.id] = pathing.find_path(unit_loc, target_loc)
                     
@@ -357,23 +334,23 @@ while True:
         print('Worker Error:', e)				
         traceback.print_exc()
     
-    try:    #knight code
-        for unit in my_units[bc.UnitType.Knight]:
-            unit_loc = unit.location.map_location()
-            for enemy in nearby_enemies[unit.id]:
-                if gc.is_attack_ready(unit.id) and gc.can_attack(unit.id, enemy.id):
-                    gc.attack(unit.id, enemy.id)
-                    break
-            if gc.is_move_ready(unit.id):
-                nearby_friends = gc.sense_nearby_units_by_team(unit_loc, 1, my_team)
-                for friend in nearby_friends:
-                    if (friend.unit_type == bc.UnitType.Knight) and (friend.id != unit.id): #spread out
-                        travel_directions[unit.id] = friend.location.map_location().direction_to(unit_loc)
-                        move_fowards(unit.id)
-                        break                        
-    except Exception as e:
-        print('Knight Error:', e)				
-        traceback.print_exc()
+    # try:    #knight code
+        # for unit in my_units[bc.UnitType.Knight]:
+            # unit_loc = unit.location.map_location()
+            # for enemy in nearby_enemies[unit.id]:
+                # if gc.is_attack_ready(unit.id) and gc.can_attack(unit.id, enemy.id):
+                    # gc.attack(unit.id, enemy.id)
+                    # break
+            # if gc.is_move_ready(unit.id):
+                # nearby_friends = gc.sense_nearby_units_by_team(unit_loc, 1, my_team)
+                # for friend in nearby_friends:
+                    # if (friend.unit_type == bc.UnitType.Knight) and (friend.id != unit.id): #spread out
+                        # travel_directions[unit.id] = friend.location.map_location().direction_to(unit_loc)
+                        # move_fowards(unit.id)
+                        # break                        
+    # except Exception as e:
+        # print('Knight Error:', e)				
+        # traceback.print_exc()
                         
     try:    #ranger code
         for unit in my_units[bc.UnitType.Ranger]:
@@ -381,8 +358,6 @@ while True:
             keep_moving = True
             
             if len(nearby_enemies[unit.id]) > 0:
-                for enemy in nearby_enemies[unit.id]:
-                    enemy_locations.append(enemy.location.map_location())
                 if gc.is_attack_ready(unit.id):
                     attackable_enemies = [enemy for enemy in nearby_enemies[unit.id] if gc.can_attack(unit.id, enemy.id)]
                     if len(attackable_enemies) > 0:
@@ -401,17 +376,22 @@ while True:
                     if gc.is_attack_ready(unit.id):
                         attackable_enemies = [enemy for enemy in nearby_enemies[unit.id] if gc.can_attack(unit.id, enemy.id)]
                         if len(attackable_enemies) > 0:
-                            lowest_enemy = find_lowest(attackable_enemies)
+                            pref_enemies = [enemy for enemy in attackable_enemies if enemy.unit_type in pref_enemy_types]
+                            if len(pref_enemies) > 0:
+                                lowest_enemy = find_lowest(pref_enemies)
+                            else:
+                                lowest_enemy = find_lowest(attackable_enemies)
                             gc.attack(unit.id, lowest_enemy.id)
                             keep_moving = False
                         
             elif gc.is_move_ready(unit.id):
-                if len(enemy_locations) > 0:
-                    target_loc = find_closest_loc(unit_loc, enemy_locations)
-                    my_paths[unit.id] = pathing.find_path(unit_loc, target_loc)
-                    move_along_path(unit)
-                else:
-                    move_fowards(unit.id)
+                if len(my_paths[unit.id]) == 0:
+                    if len(all_vis_enemies) > 0:
+                        closest_enemy = find_closest_unit(unit, all_vis_enemies)
+                        my_paths[unit.id] = pathing.find_path(unit_loc, closest_enemy.location.map_location())
+                    else:
+                        find_path_to_center(unit)
+                move_along_path(unit)
     except Exception as e:
         print('Ranger Error:', e)				
         traceback.print_exc()
@@ -431,17 +411,19 @@ while True:
                     lowest_friend = find_most_missing(healable_friends)
                     gc.heal(unit.id, lowest_friend.id)
                         
-            if gc.is_move_ready(unit.id):           
-                if len(nearby_friends) > 0:        
-                    lowest_friend = find_most_missing(nearby_friends)
-                    my_paths[unit.id] = pathing.find_path(unit_loc, lowest_friend.location.map_location())
-                    move_along_path(unit)             
-                elif len(my_units[bc.UnitType.Ranger]) > 0:
-                    lowest_friend = find_most_missing(my_units[bc.UnitType.Ranger])
-                    my_paths[unit.id] = pathing.find_path(unit_loc, lowest_friend.location.map_location())
-                    move_along_path(unit)
-                else:
-                    move_fowards(unit.id)
+            if gc.is_move_ready(unit.id):
+                if len(my_paths[unit.id]) == 0:
+                    if len(nearby_friends) > 0:        
+                        lowest_friend = find_most_missing(nearby_friends)
+                        my_paths[unit.id] = pathing.find_path(unit_loc, lowest_friend.location.map_location())
+                    else:
+                        front_line = [friend for friend in my_units[bc.UnitType.Ranger] if friend.health < friend.max_health or len(nearby_enemies[friend.id]) > 0]
+                        if len(front_line) > 0:
+                            lowest_friend = find_most_missing(front_line)
+                            my_paths[unit.id] = pathing.find_path(unit_loc, lowest_friend.location.map_location())
+                        else:
+                            find_path_to_center(unit)
+                move_along_path(unit)
     except Exception as e:
         print('Healer Error:', e)				
         traceback.print_exc()
@@ -452,8 +434,6 @@ while True:
             nearby_enemies[unit.id][:] = [enemy for enemy in nearby_enemies[unit.id] if gc.can_sense_unit(enemy.id)]
             
             if len(nearby_enemies[unit.id]) > 0:
-                for enemy in nearby_enemies[unit.id]:
-                    enemy_locations.append(enemy.location.map_location())
                 if gc.is_attack_ready(unit.id):
                     lowest_enemy = find_lowest(nearby_enemies[unit.id])
                     gc.attack(unit.id, lowest_enemy.id)
@@ -469,15 +449,36 @@ while True:
                         move_along_path(unit)
                         
             elif gc.is_move_ready(unit.id):
-                if len(enemy_locations) > 0:
-                    target_loc = find_closest_loc(unit_loc, enemy_locations)
-                    my_paths[unit.id] = pathing.find_path(unit_loc, target_loc)
-                    move_along_path(unit)
-                else:
-                    move_fowards(unit.id)
+                if len(my_paths[unit.id]) == 0:
+                    if len(all_vis_enemies) > 0:
+                        closest_enemy = find_closest_unit(unit, all_vis_enemies)
+                        my_paths[unit.id] = pathing.find_path(unit_loc, closest_enemy.location.map_location())
+                    else:
+                        find_path_to_center(unit)
+                move_along_path(unit)
     except Exception as e:
         print('Mage Error:', e)				
         traceback.print_exc()
+        
+    
+    try:    #earth rocket code
+        for unit in my_units[bc.UnitType.Rocket]:
+            unit_loc = unit.location.map_location()
+            garrison = unit.structure_garrison()
+            if len(garrison) < unit.structure_max_capacity():
+                nearby_friends = gc.sense_nearby_units_by_team(unit_loc, 2, my_team)
+                for friend in nearby_friends:
+                    if gc.can_load(unit.id, friend.id) and len(garrison) < unit.structure_max_capacity():
+                        gc.load(unit.id, friend.id)
+                        my_paths[friend.id] = []
+            if len(garrison) == unit.structure_max_capacity() or gc.round() == 725 or unit.health < unit.max_health:
+                destination = random.choice(pathing.mars_spaces)
+                if gc.can_launch_rocket(unit.id, bc.MapLocation(bc.Planet.Mars, destination[0], destination[1])):
+                    gc.launch_rocket(unit.id, bc.MapLocation(bc.Planet.Mars, destination[0], destination[1]))
+    except Exception as e:
+        print('Rocket Error:', e)				
+        traceback.print_exc()    
+    
         
     # send the actions we've performed, and wait for our next turn.
     gc.next_turn()
